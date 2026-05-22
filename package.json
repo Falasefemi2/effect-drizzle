@@ -16,9 +16,9 @@
   },
   "dependencies": {
     "@effect/platform-bun": "https://pkg.pr.new/Effect-TS/effect-smol/@effect/platform-bun@4d52dfb",
-    "@effect/sql-pg": "https://pkg.pr.new/Effect-TS/effect-smol/@effect/sql-pg@1e691a9",
     "drizzle-orm": "1.0.0-beta.20",
-    "effect": "https://pkg.pr.new/Effect-TS/effect-smol/effect@4d52dfb",
+    "effect": "4.0.0-beta.42",
+    "@effect/sql-pg": "4.0.0-beta.42",
     "pg": "^8.16.0"
   },
   "patchedDependencies": {
