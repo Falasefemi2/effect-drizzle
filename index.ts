@@ -4,9 +4,9 @@ import {
   HttpApiEndpoint,
   HttpApiGroup,
   HttpApiScalar,
-  HttpMiddleware,
-  HttpServer,
-} from "@effect/platform";
+  OpenApi,
+} from "effect/unstable/httpapi";
+import { HttpMiddleware, HttpRouter, HttpServer } from "effect/unstable/http";
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun";
 import { asc, between, count, eq, getColumns, sql } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
@@ -20,9 +20,9 @@ import {
   type SelectUser,
 } from "./src/db/schema";
 
-const IdParam = Schema.Struct({
-  id: Schema.NumberFromString,
-});
+// ---- Schemas ----
+
+const IdParam = Schema.Struct({ id: Schema.NumberFromString });
 
 const PaginationParams = Schema.Struct({
   page: Schema.optional(Schema.NumberFromString),
@@ -70,13 +70,9 @@ const UpdatePostPayload = Schema.Struct({
   content: Schema.optional(Schema.String),
 });
 
-const RecentPost = Schema.Struct({
-  id: Schema.Int,
-  title: Schema.String,
-});
+const RecentPost = Schema.Struct({ id: Schema.Int, title: Schema.String });
 
-const toApiError = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
+// ---- Helpers ----
 
 const toPostResponse = (post: SelectPost): typeof Post.Type => ({
   ...post,
@@ -84,14 +80,16 @@ const toPostResponse = (post: SelectPost): typeof Post.Type => ({
   updatedAt: post.updatedAt.toISOString(),
 });
 
-const withApiError = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  effect.pipe(Effect.mapError(toApiError));
+// orDie makes error channel `never` — no error declaration needed on endpoints
+const withOrDie = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(Effect.orDie);
+
+// ---- DB operations ----
 
 export const createUsers = (data: InsertUser) =>
   Effect.gen(function* () {
     const drizzle = yield* PgDrizzle;
-    const users = yield* drizzle.insert(usersTable).values(data).returning();
-    return users;
+    return yield* drizzle.insert(usersTable).values(data).returning();
   });
 
 export const createPost = (data: InsertPost) =>
@@ -104,38 +102,30 @@ export const createPost = (data: InsertPost) =>
 export const getUserById = (id: SelectUser["id"]) =>
   Effect.gen(function* () {
     const drizzle = yield* PgDrizzle;
-    const users = yield* drizzle
+    return yield* drizzle
       .select()
       .from(usersTable)
       .where(eq(usersTable.id, id));
-    return users;
   });
 
 export const getUserWithPostCount = (page = 1, pageSize = 5) =>
   Effect.gen(function* () {
     const drizzle = yield* PgDrizzle;
-    const users = yield* drizzle
-      .select({
-        ...getColumns(usersTable),
-        postsCount: count(postsTable.id),
-      })
+    return yield* drizzle
+      .select({ ...getColumns(usersTable), postsCount: count(postsTable.id) })
       .from(usersTable)
       .leftJoin(postsTable, eq(usersTable.id, postsTable.userId))
       .groupBy(usersTable.id)
       .orderBy(asc(usersTable.id))
       .limit(pageSize)
       .offset((page - 1) * pageSize);
-    return users;
   });
 
 export const getPostsForLast24Hours = (page = 1, pageSize = 5) =>
   Effect.gen(function* () {
     const drizzle = yield* PgDrizzle;
-    const posts = yield* drizzle
-      .select({
-        id: postsTable.id,
-        title: postsTable.title,
-      })
+    return yield* drizzle
+      .select({ id: postsTable.id, title: postsTable.title })
       .from(postsTable)
       .where(
         between(
@@ -146,7 +136,6 @@ export const getPostsForLast24Hours = (page = 1, pageSize = 5) =>
       )
       .limit(pageSize)
       .offset((page - 1) * pageSize);
-    return posts;
   });
 
 export const updatePost = (
@@ -166,101 +155,99 @@ export const updatePost = (
 export const deleteUser = (id: SelectUser["id"]) =>
   Effect.gen(function* () {
     const drizzle = yield* PgDrizzle;
-    const users = yield* drizzle
+    return yield* drizzle
       .delete(usersTable)
       .where(eq(usersTable.id, id))
       .returning();
-    return users;
   });
 
-export const Api = HttpApi.make("EffectDrizzleApi")
-  .addError(Schema.String, { status: 500 })
-  .add(
-    HttpApiGroup.make("Users")
-      .add(
-        HttpApiEndpoint.get("listUsers", "/users")
-          .setUrlParams(PaginationParams)
-          .addSuccess(Schema.Array(UserWithPostCount)),
-      )
-      .add(
-        HttpApiEndpoint.get("getUser", "/users/:id")
-          .setPath(IdParam)
-          .addSuccess(Schema.Array(User)),
-      )
-      .add(
-        HttpApiEndpoint.post("createUser", "/users")
-          .setPayload(NewUser)
-          .addSuccess(Schema.Array(User)),
-      )
-      .add(
-        HttpApiEndpoint.del("deleteUser", "/users/:id")
-          .setPath(IdParam)
-          .addSuccess(Schema.Array(User)),
-      ),
-  )
-  .add(
-    HttpApiGroup.make("Posts")
-      .add(
-        HttpApiEndpoint.post("createPost", "/posts")
-          .setPayload(NewPost)
-          .addSuccess(Schema.Array(Post)),
-      )
-      .add(
-        HttpApiEndpoint.get("recentPosts", "/posts/recent")
-          .setUrlParams(PaginationParams)
-          .addSuccess(Schema.Array(RecentPost)),
-      )
-      .add(
-        HttpApiEndpoint.patch("updatePost", "/posts/:id")
-          .setPath(IdParam)
-          .setPayload(UpdatePostPayload)
-          .addSuccess(Schema.Array(Post)),
-      ),
-  );
+// ---- API Definition ----
 
-export const UsersLive = HttpApiBuilder.group(Api, "Users", (handlers) =>
+class UsersGroup extends HttpApiGroup.make("users").add(
+  HttpApiEndpoint.get("listUsers", "/users", {
+    query: PaginationParams,
+    success: Schema.Array(UserWithPostCount),
+  }),
+  HttpApiEndpoint.get("getUser", "/users/:id", {
+    params: IdParam,
+    success: Schema.Array(User),
+  }),
+  HttpApiEndpoint.post("createUser", "/users", {
+    payload: NewUser,
+    success: Schema.Array(User),
+  }),
+  HttpApiEndpoint.delete("deleteUser", "/users/:id", {
+    params: IdParam,
+    success: Schema.Array(User),
+  }),
+) {}
+
+class PostsGroup extends HttpApiGroup.make("posts").add(
+  HttpApiEndpoint.post("createPost", "/posts", {
+    payload: NewPost,
+    success: Schema.Array(Post),
+  }),
+  HttpApiEndpoint.get("recentPosts", "/posts/recent", {
+    query: PaginationParams,
+    success: Schema.Array(RecentPost),
+  }),
+  HttpApiEndpoint.patch("updatePost", "/posts/:id", {
+    params: IdParam,
+    payload: UpdatePostPayload,
+    success: Schema.Array(Post),
+  }),
+) {}
+
+export class Api extends HttpApi.make("EffectDrizzleApi")
+  .add(UsersGroup)
+  .add(PostsGroup)
+  .annotateMerge(OpenApi.annotations({ title: "Effect Drizzle API" })) {}
+
+// ---- Handlers ----
+
+export const UsersLive = HttpApiBuilder.group(Api, "users", (handlers) =>
   handlers
-    .handle("listUsers", ({ urlParams }) =>
-      withApiError(
-        getUserWithPostCount(urlParams.page ?? 1, urlParams.pageSize ?? 5),
-      ),
+    .handle("listUsers", ({ query }) =>
+      withOrDie(getUserWithPostCount(query.page ?? 1, query.pageSize ?? 5)),
     )
-    .handle("getUser", ({ path }) => withApiError(getUserById(path.id)))
-    .handle("createUser", ({ payload }) => withApiError(createUsers(payload)))
-    .handle("deleteUser", ({ path }) => withApiError(deleteUser(path.id))),
+    .handle("getUser", ({ params }) => withOrDie(getUserById(params.id)))
+    .handle("createUser", ({ payload }) => withOrDie(createUsers(payload)))
+    .handle("deleteUser", ({ params }) => withOrDie(deleteUser(params.id))),
 );
 
-export const PostsLive = HttpApiBuilder.group(Api, "Posts", (handlers) =>
+export const PostsLive = HttpApiBuilder.group(Api, "posts", (handlers) =>
   handlers
-    .handle("createPost", ({ payload }) => withApiError(createPost(payload)))
-    .handle("recentPosts", ({ urlParams }) =>
-      withApiError(
-        getPostsForLast24Hours(urlParams.page ?? 1, urlParams.pageSize ?? 5),
-      ),
+    .handle("createPost", ({ payload }) => withOrDie(createPost(payload)))
+    .handle("recentPosts", ({ query }) =>
+      withOrDie(getPostsForLast24Hours(query.page ?? 1, query.pageSize ?? 5)),
     )
-    .handle("updatePost", ({ path, payload }) =>
-      withApiError(updatePost(path.id, payload)),
+    .handle("updatePost", ({ params, payload }) =>
+      withOrDie(updatePost(params.id, payload)),
     ),
 );
 
-export const ApiLive = HttpApiBuilder.api(Api).pipe(
+// ---- Server Layer ----
+
+// ---- Server Layer ----
+
+export const ApiLive = HttpApiBuilder.layer(Api, {
+  openapiPath: "/openapi.json",
+}).pipe(
   Layer.provide(UsersLive),
   Layer.provide(PostsLive),
   Layer.provide(DatabaseLive),
-  Layer.provide(HttpApiScalar.layer({ path: "/docs" })),
+  Layer.provide(HttpApiScalar.layer(Api)),
 );
 
-export const HttpLive = HttpApiBuilder.serve(HttpMiddleware.logger).pipe(
-  Layer.provide(ApiLive),
+export const HttpLive = HttpRouter.serve(
+  Layer.mergeAll(ApiLive), // ← merged, then passed to serve
+).pipe(
   HttpServer.withLogAddress,
   Layer.provide(BunHttpServer.layer({ port: 3000 })),
 );
 
 if (import.meta.main) {
-  const main = Layer.launch(HttpLive).pipe(
-    Effect.mapError(toApiError),
-    Effect.orDie,
-  ) as Effect.Effect<never, never, never>;
-
-  BunRuntime.runMain(main);
+  BunRuntime.runMain(
+    Layer.launch(HttpLive) as Effect.Effect<never, never, never>,
+  );
 }
