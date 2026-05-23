@@ -6,7 +6,7 @@ import {
   HttpApiScalar,
   OpenApi,
 } from "effect/unstable/httpapi";
-import { HttpMiddleware, HttpRouter, HttpServer } from "effect/unstable/http";
+import { HttpRouter, HttpServer } from "effect/unstable/http";
 import { BunHttpServer, BunRuntime } from "@effect/platform-bun";
 import { asc, between, count, eq, getColumns, sql } from "drizzle-orm";
 import { Effect, Layer, Schema } from "effect";
@@ -20,7 +20,7 @@ import {
   type SelectUser,
 } from "./src/db/schema";
 
-// ---- Schemas ----
+console.log("main?", import.meta.main);
 
 const IdParam = Schema.Struct({ id: Schema.NumberFromString });
 
@@ -72,19 +72,14 @@ const UpdatePostPayload = Schema.Struct({
 
 const RecentPost = Schema.Struct({ id: Schema.Int, title: Schema.String });
 
-// ---- Helpers ----
-
 const toPostResponse = (post: SelectPost): typeof Post.Type => ({
   ...post,
   createdAt: post.createdAt.toISOString(),
   updatedAt: post.updatedAt.toISOString(),
 });
 
-// orDie makes error channel `never` — no error declaration needed on endpoints
 const withOrDie = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.orDie);
-
-// ---- DB operations ----
 
 export const createUsers = (data: InsertUser) =>
   Effect.gen(function* () {
@@ -161,8 +156,6 @@ export const deleteUser = (id: SelectUser["id"]) =>
       .returning();
   });
 
-// ---- API Definition ----
-
 class UsersGroup extends HttpApiGroup.make("users").add(
   HttpApiEndpoint.get("listUsers", "/users", {
     query: PaginationParams,
@@ -203,8 +196,6 @@ export class Api extends HttpApi.make("EffectDrizzleApi")
   .add(PostsGroup)
   .annotateMerge(OpenApi.annotations({ title: "Effect Drizzle API" })) {}
 
-// ---- Handlers ----
-
 export const UsersLive = HttpApiBuilder.group(Api, "users", (handlers) =>
   handlers
     .handle("listUsers", ({ query }) =>
@@ -226,10 +217,6 @@ export const PostsLive = HttpApiBuilder.group(Api, "posts", (handlers) =>
     ),
 );
 
-// ---- Server Layer ----
-
-// ---- Server Layer ----
-
 export const ApiLive = HttpApiBuilder.layer(Api, {
   openapiPath: "/openapi.json",
 }).pipe(
@@ -239,9 +226,7 @@ export const ApiLive = HttpApiBuilder.layer(Api, {
   Layer.provide(HttpApiScalar.layer(Api)),
 );
 
-export const HttpLive = HttpRouter.serve(
-  Layer.mergeAll(ApiLive), // ← merged, then passed to serve
-).pipe(
+export const HttpLive = HttpRouter.serve(Layer.mergeAll(ApiLive)).pipe(
   HttpServer.withLogAddress,
   Layer.provide(BunHttpServer.layer({ port: 3000 })),
 );
