@@ -1,4 +1,5 @@
 import { integer, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const usersTable = pgTable("users_table", {
   id: serial("id").primaryKey(),
@@ -17,7 +18,8 @@ export const postsTable = pgTable("posts_table", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at")
     .notNull()
-    .$onUpdate(() => new Date()),
+    .defaultNow()
+    .$onUpdate(() => sql`now()`),
 });
 
 export type InsertUser = typeof usersTable.$inferInsert;
